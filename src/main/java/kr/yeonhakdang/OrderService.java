@@ -43,6 +43,7 @@ public class OrderService {
     public Map<String,Object> prepare(UUID user,UUID id,String method) {
         var o=db.owned(user,id);accounts.requireConsent(user);
         if(!sales) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"PAID_CONTENT_NOT_READY");
+        if(db.rows("select order_id from order_result_snapshot where order_id=?",id).isEmpty()) throw ApiException.conflict("SAVED_RESULT_MISSING");
         if(!Set.of("CREATED","READY","FAILED").contains(o.get("status"))) throw ApiException.conflict("ORDER_NOT_PAYABLE");
         String channel=channels.get(method);
         if(channel==null||channel.isBlank()||store.isBlank()) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"CHANNEL_NOT_CONFIGURED");
