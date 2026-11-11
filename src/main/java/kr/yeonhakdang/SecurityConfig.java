@@ -34,8 +34,8 @@ public class SecurityConfig {
         cors.setAllowedHeaders(List.of("Content-Type","X-CSRF-TOKEN","Idempotency-Key"));
         var source=new UrlBasedCorsConfigurationSource();source.registerCorsConfiguration("/**",cors);
         http.cors(c->c.configurationSource(source))
-            .csrf(c->c.csrfTokenRepository(new HttpSessionCsrfTokenRepository()).ignoringRequestMatchers("/api/webhooks/portone"))
-            .authorizeHttpRequests(a->a.requestMatchers("/actuator/health","/api/csrf","/api/products","/api/policies","/api/webhooks/portone","/oauth2/**","/login/**").permitAll()
+            .csrf(c->c.csrfTokenRepository(new HttpSessionCsrfTokenRepository()).ignoringRequestMatchers("/api/webhooks/portone","/api/webhooks/payapp","/api/payments/payapp/return"))
+            .authorizeHttpRequests(a->a.requestMatchers("/actuator/health","/api/csrf","/api/products","/api/policies","/api/webhooks/portone","/api/webhooks/payapp","/api/payments/payapp/return","/oauth2/**","/login/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN").anyRequest().authenticated())
             .exceptionHandling(e->e.authenticationEntryPoint((req,res,ex)->json(res,401,"UNAUTHENTICATED"))
                 .accessDeniedHandler((req,res,ex)->json(res,403,"FORBIDDEN")))

@@ -15,11 +15,13 @@ public class OrderService {
     private final Store db;private final AccountService accounts;private final ObjectMapper json;private final Clock clock;
     private final PaymentGateway gateway;private final String store,version,frontend;private final boolean sales;
     private final Map<String,String> channels;
+    private final org.springframework.transaction.support.TransactionTemplate tx;
     public OrderService(Store db,AccountService accounts,ObjectMapper json,Clock clock,PaymentGateway gateway,
-        @Value("${app.portone.store-id}") String store,@Value("${app.policy-version}") String version,
+        @Value("${app.payment.merchant-id}") String store,@Value("${app.portone.store-id}") String legacyStore,@Value("${app.policy-version}") String version,
         @Value("${app.sales-enabled}") boolean sales,@Value("${app.portone.card-channel}") String card,
-        @Value("${app.portone.kakao-channel}") String kakao,@Value("${app.portone.toss-channel}") String toss,@Value("${app.frontend-origin}") String frontend) {
-        this.db=db;this.accounts=accounts;this.json=json;this.clock=clock;this.gateway=gateway;this.store=store;this.version=version;this.sales=sales;
+        @Value("${app.portone.kakao-channel}") String kakao,@Value("${app.portone.toss-channel}") String toss,@Value("${app.frontend-origin}") String frontend,org.springframework.transaction.PlatformTransactionManager tm) {
+        tx=new org.springframework.transaction.support.TransactionTemplate(tm);
+        this.db=db;this.accounts=accounts;this.json=json;this.clock=clock;this.gateway=gateway;this.store=gateway instanceof PayAppGateway?store:legacyStore;this.version=version;this.sales=sales;
         channels=Map.of("CARD",card,"KAKAO",kakao,"TOSS",toss);this.frontend=frontend;
     }
     @Transactional
@@ -39,8 +41,17 @@ public class OrderService {
             id,user,r.get("id"),input.product(),p.get("price"),"yhd-"+id,clock.instant(),version,clock.instant(),json.writeValueAsString(input.universities()),input.relation(),key,fingerprint);
         return db.order(id);
     }
-    @Transactional
-    public Map<String,Object> prepare(UUID user,UUID id,String method) {
+    public Map<String,Object> prepare(UUID user,UUID id,String method) { return prepare(user,id,method,null); }
+    public Map<String,Object> prepare(UUID user,UUID id,String method,String phone) {
+        if(gateway instanceof PayAppGateway payapp) {
+            tx.executeWithoutResult(s->{db.owned(user,id);accounts.requireConsent(user);
+                if(!sales) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"PAID_CONTENT_NOT_READY");
+                if(db.rows("select order_id from order_result_snapshot where order_id=?",id).isEmpty()) throw ApiException.conflict("SAVED_RESULT_MISSING");});
+            return payapp.prepare(user,id,method,phone);
+        }
+        return tx.execute(s->prepareLegacy(user,id,method));
+    }
+    private Map<String,Object> prepareLegacy(UUID user,UUID id,String method) {
         var o=db.owned(user,id);accounts.requireConsent(user);
         if(!sales) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"PAID_CONTENT_NOT_READY");
         if(db.rows("select order_id from order_result_snapshot where order_id=?",id).isEmpty()) throw ApiException.conflict("SAVED_RESULT_MISSING");
@@ -57,14 +68,27 @@ public class OrderService {
         sdk.put("customData",Map.of("orderId",id.toString()));
         sdk.put("redirectUrl",frontend+"/?checkoutOrder="+id);sdk.put("forceRedirect",true);return sdk;
     }
-    @Transactional
-    public Map<String,Object> complete(UUID user,UUID id) { db.owned(user,id);return sync(id); }
-    // Caller holds member then order locks. Webhook and browser completion use this same transaction path.
-    @Transactional
+    public Map<String,Object> complete(UUID user,UUID id) {
+        tx.executeWithoutResult(s->db.owned(user,id));
+        var payment=fetch(id); // No database locks during provider I/O.
+        return tx.execute(s->{db.owned(user,id);return applyPayment(id,payment);});
+    }
+    record PaymentSnapshot(PaymentGateway.Payment payment,long revision) {}
+    PaymentSnapshot fetch(UUID id) {
+        var o=db.one("select payment_id,sync_revision from purchase_order where id=?",id);
+        return new PaymentSnapshot(gateway.get((String)o.get("payment_id")),((Number)o.get("sync_revision")).longValue());
+    }
     public Map<String,Object> sync(UUID id) {
+        var payment=fetch(id);
+        return tx.execute(s->applyPayment(id,payment));
+    }
+    // Must run inside a transaction; always lock member before order and re-read local state.
+    Map<String,Object> applyPayment(UUID id,PaymentSnapshot snapshot) {
         var owner=db.one("select member_id from purchase_order where id=?",id).get("member_id");
         var member=db.member((UUID)owner);var o=db.order(id);
-        var payment=gateway.get((String)o.get("payment_id"));
+        if(((Number)o.get("sync_revision")).longValue()!=snapshot.revision()) throw ApiException.conflict("PAYMENT_STATE_CHANGED");
+        var payment=snapshot.payment();
+        db.update("update purchase_order set sync_revision=sync_revision+1 where id=?",id);
         if(!matches(o,payment)) {
             db.update("update purchase_order set status='REVIEW_REQUIRED' where id=?",id);
             db.update("update entitlement set status='SUSPENDED' where order_id=? and status='ACTIVE'",id);
@@ -92,7 +116,7 @@ public class OrderService {
             return db.order(id);
         }
         if("PAID".equals(payment.status())) {
-            if(payment.paidAt()==null||payment.paidAt().isBefore(Store.instant(o.get("created_at")))||payment.paidAt().isAfter(clock.instant().plusSeconds(60)))
+            if(payment.paidAt()==null||payment.paidAt().isBefore(Store.instant(o.get("created_at")).truncatedTo(java.time.temporal.ChronoUnit.SECONDS))||payment.paidAt().isAfter(clock.instant().plusSeconds(60)))
                 throw new ApiException(HttpStatus.BAD_GATEWAY,"INVALID_PROVIDER_PAYMENT_TIME");
             if(Set.of("REFUNDED","PARTIALLY_REFUNDED").contains(o.get("status"))) return o;
             db.update("update purchase_order set status='PAID',paid_at=coalesce(paid_at,?) where id=?",payment.paidAt(),id);

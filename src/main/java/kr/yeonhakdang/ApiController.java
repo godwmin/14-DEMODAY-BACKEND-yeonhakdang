@@ -21,7 +21,7 @@ public class ApiController {
         @NotNull @Size(max=6) List<@NotBlank @Size(max=80) String> universities,
         @NotNull @Size(max=20) String relation,@NotBlank @Size(max=80) String policyVersion,
         boolean orderConsent,boolean refundConsent) {}
-    public record PrepareInput(@NotBlank String method) {}
+    public record PrepareInput(@NotBlank String method,@Size(max=20) String phone) {}
     public record RefundInput(@NotBlank @Size(max=40) String reason) {}
     private final AccountService accounts;private final OrderService orders;private final ContentService content;private final RefundService refunds;
     private final Store db;private final String version;
@@ -43,7 +43,7 @@ public class ApiController {
     @PostMapping("/orders") Object order(Authentication a,@RequestHeader("Idempotency-Key") String key,@Valid @RequestBody OrderInput input) {return orders.create(user(a),key,input);}
     @GetMapping("/orders") Object history(Authentication a) {return orders.history(user(a));}
     @GetMapping("/orders/{id}") Object status(Authentication a,@PathVariable UUID id) {return orders.get(user(a),id);}
-    @PostMapping("/orders/{id}/prepare") Object prepare(Authentication a,@PathVariable UUID id,@Valid @RequestBody PrepareInput input) {return orders.prepare(user(a),id,input.method());}
+    @PostMapping("/orders/{id}/prepare") Object prepare(Authentication a,@PathVariable UUID id,@Valid @RequestBody PrepareInput input) {return orders.prepare(user(a),id,input.method(),input.phone());}
     @PostMapping("/orders/{id}/complete") Object complete(Authentication a,@PathVariable UUID id) {return orders.complete(user(a),id);}
     @GetMapping("/locker") Object locker(Authentication a) {return content.locker(user(a));}
     @PostMapping("/orders/{id}/products/{product}/open") Object open(Authentication a,@PathVariable UUID id,@PathVariable String product) {return content.open(user(a),id,product);}

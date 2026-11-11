@@ -10,6 +10,7 @@ import java.time.*;
 import java.util.*;
 
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name="app.payment.provider",havingValue="portone")
 public class PortOneGateway implements PaymentGateway {
     private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final ObjectMapper json; private final String secret,store,baseUrl;

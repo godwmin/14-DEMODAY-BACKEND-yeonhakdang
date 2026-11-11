@@ -57,11 +57,16 @@ public class RefundService {
             db.update("update entitlement set status='ACTIVE' where order_id=? and status='REFUND_PENDING'",r.get("order_id"));
         });
     }
+    private PaymentGateway.Payment paymentFor(UUID admin,UUID id) {
+        content.requireAdmin(admin);
+        var r=db.one("select order_id from refund_request where id=?",id);
+        return orders.fetch((UUID)r.get("order_id")).payment();
+    }
     public Map<String,Object> process(UUID admin,UUID id) {
+        var p=paymentFor(admin,id);
         var intent=tx.execute(s->{var r=locked(admin,id);
             if(!"REQUESTED".equals(r.get("status"))) throw ApiException.conflict("REFUND_ALREADY_PROCESSED_OR_UNKNOWN");
             var o=db.order((UUID)r.get("order_id"));
-            var p=gateway.get((String)o.get("payment_id"));
             int known=db.rows("select amount from refund_request where order_id=? and status='SUCCEEDED'",r.get("order_id")).stream().mapToInt(x->Store.number(x,"amount")).sum();
             if(!orders.matches(o,p)||!Set.of("PAID","PARTIAL_CANCELLED").contains(p.status())||p.cancelled()!=known) throw ApiException.conflict("PROVIDER_REVIEW_REQUIRED");
             db.update("update refund_request set status='PROCESSING',reviewed_by=?,reviewed_at=?,baseline_cancelled=? where id=?",admin,clock.instant(),p.cancelled(),id);
@@ -70,7 +75,7 @@ public class RefundService {
         // Durable reservation above commits BEFORE the irreversible provider call. Never retry POST automatically.
         try {
             var cancellation=gateway.cancel((String)intent.get("paymentId"),(int)intent.get("amount"),(int)intent.get("remaining"),(String)intent.get("reason"));
-            tx.executeWithoutResult(s->{locked(admin,id);db.update("update refund_request set cancellation_id=?,status=? where id=?",cancellation.id(),"FAILED".equals(cancellation.status())?"UNKNOWN":"PROCESSING",id);});
+            tx.executeWithoutResult(s->{locked(admin,id);db.update("update refund_request set cancellation_id=?,status=? where id=? and status<>'SUCCEEDED'",cancellation.id(),"FAILED".equals(cancellation.status())?"UNKNOWN":"PROCESSING",id);});
             orders.sync((UUID)intent.get("order"));
         } catch(Exception e) {
             tx.executeWithoutResult(s->{locked(admin,id);db.update("update refund_request set status='UNKNOWN' where id=? and status<>'SUCCEEDED'",id);});
@@ -78,9 +83,10 @@ public class RefundService {
         return db.one("select * from refund_request where id=?",id);
     }
     public Map<String,Object> reconcile(UUID admin,UUID id,String cancellationId) {
+        var p=paymentFor(admin,id);
         UUID order=tx.execute(s->{var r=locked(admin,id);
             if(!Set.of("REQUESTED","PROCESSING","UNKNOWN").contains(r.get("status"))) throw ApiException.conflict("REFUND_NOT_PENDING");
-            var o=db.order((UUID)r.get("order_id"));var p=gateway.get((String)o.get("payment_id"));
+            var o=db.order((UUID)r.get("order_id"));
             if(!orders.matches(o,p)) throw ApiException.conflict("PROVIDER_REVIEW_REQUIRED");
             var c=p.cancellations().stream().filter(x->x.id().equals(cancellationId)&&x.amount()==Store.number(r,"amount")).findFirst().orElseThrow(()->ApiException.conflict("CANCELLATION_NOT_FOUND"));
             if(!Set.of("SUCCEEDED","REQUESTED").contains(c.status())) throw ApiException.conflict("CANCELLATION_NOT_CONFIRMED");

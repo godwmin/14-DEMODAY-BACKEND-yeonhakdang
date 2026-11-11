@@ -16,6 +16,7 @@ spring:
 server:
   port: ${PORT:8080}
   shutdown: graceful
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
   servlet:
     session:
       cookie:
@@ -43,6 +44,16 @@ app:
   oauth-enabled: ${KAKAO_ENABLED:false}
   policy-version: ${POLICY_VERSION:2026-10-29-draft}
   sales-enabled: ${SALES_ENABLED:false}
+  payment:
+    provider: ${PAYMENT_PROVIDER:payapp}
+    merchant-id: ${PAYAPP_USER_ID:}
+  payapp:
+    user-id: ${PAYAPP_USER_ID:}
+    link-key: ${PAYAPP_LINK_KEY:}
+    link-value: ${PAYAPP_LINK_VALUE:}
+    request-key: ${PAYAPP_REQUEST_KEY:}
+    public-origin: ${BACKEND_PUBLIC_ORIGIN:}
+    methods: ${PAYAPP_METHODS:CARD}
   portone:
     secret: ${PORTONE_API_SECRET:}
     webhook-secret: ${PORTONE_WEBHOOK_SECRET:}

@@ -7,6 +7,9 @@ spring:
     jdbc:
       initialize-schema: never
 app:
+  payment:
+    provider: portone
+    merchant-id: store-test
   sales-enabled: true
   portone:
     store-id: store-test
