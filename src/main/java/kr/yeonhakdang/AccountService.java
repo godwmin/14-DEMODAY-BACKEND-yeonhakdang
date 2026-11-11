@@ -49,6 +49,8 @@ public class AccountService {
         // A refund must not prevent deletion of the account's service data.
         db.update("update entitlement set content=null,content_version=null,status='REVOKED' where order_id in (select id from purchase_order where member_id=?)",user);
         db.update("delete from order_result_snapshot where order_id in (select id from purchase_order where member_id=?)",user);
+        db.update("delete from member_friendship where member_a=? or member_b=?",user,user);
+        db.update("delete from member_invitation where member_id=?",user);
         db.update("delete from account_analysis_profile where member_id=?",user);
         db.update("delete from analysis_result where member_id=?",user);
         db.update("delete from consent where member_id=?",user);

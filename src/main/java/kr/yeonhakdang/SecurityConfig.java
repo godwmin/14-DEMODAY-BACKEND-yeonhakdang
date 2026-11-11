@@ -35,7 +35,8 @@ public class SecurityConfig {
         var source=new UrlBasedCorsConfigurationSource();source.registerCorsConfiguration("/**",cors);
         http.cors(c->c.configurationSource(source))
             .csrf(c->c.csrfTokenRepository(new HttpSessionCsrfTokenRepository()).ignoringRequestMatchers("/api/webhooks/portone","/api/webhooks/payapp","/api/payments/payapp/return"))
-            .authorizeHttpRequests(a->a.requestMatchers("/actuator/health","/api/csrf","/api/products","/api/policies","/api/webhooks/portone","/api/webhooks/payapp","/api/payments/payapp/return","/oauth2/**","/login/**").permitAll()
+            .authorizeHttpRequests(a->a.requestMatchers(org.springframework.http.HttpMethod.GET,"/api/invitations/**").permitAll()
+                .requestMatchers("/actuator/health","/api/csrf","/api/products","/api/policies","/api/webhooks/portone","/api/webhooks/payapp","/api/payments/payapp/return","/oauth2/**","/login/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN").anyRequest().authenticated())
             .exceptionHandling(e->e.authenticationEntryPoint((req,res,ex)->json(res,401,"UNAUTHENTICATED"))
                 .accessDeniedHandler((req,res,ex)->json(res,403,"FORBIDDEN")))
