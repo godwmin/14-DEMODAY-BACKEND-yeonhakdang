@@ -58,7 +58,7 @@ class ServiceIntegrationTest {
     @Test void forgedAmountCurrencyStoreOrOrderNeverGrants() {
         for(int fault=0;fault<4;fault++) {
             UUID id=create("charm");var p=paid(id);
-            when(gateway.get("yhd-"+id)).thenReturn(new PaymentGateway.Payment(p.id(),"PAID",fault==0?1:990,0,fault==1?"USD":"KRW",fault==2?"attacker-store":"store-test",fault==3?UUID.randomUUID().toString():id.toString(),Instant.now(),List.of()));
+            when(gateway.get("yhd-"+id)).thenReturn(new PaymentGateway.Payment(p.id(),"PAID",fault==0?1:1000,0,fault==1?"USD":"KRW",fault==2?"attacker-store":"store-test",fault==3?UUID.randomUUID().toString():id.toString(),Instant.now(),List.of()));
             assertThat(orders.complete(user,id).get("status")).isEqualTo("REVIEW_REQUIRED");
             assertThat(db.rows("select * from entitlement where order_id=?",id)).isEmpty();
         }
@@ -146,7 +146,7 @@ class ServiceIntegrationTest {
         when(gateway.cancel(anyString(),anyInt(),anyInt(),anyString())).thenThrow(new RuntimeException("timeout"));
         assertThat(refunds.process(admin,r).get("status")).isEqualTo("UNKNOWN");
         assertThatThrownBy(()->refunds.process(admin,r)).isInstanceOf(ApiException.class);
-        var p=paid(id);when(gateway.get("yhd-"+id)).thenReturn(new PaymentGateway.Payment(p.id(),"CANCELLED",990,990,"KRW","store-test",id.toString(),p.paidAt(),List.of(new PaymentGateway.Cancellation("lost-response","SUCCEEDED",990))));
+        var p=paid(id);when(gateway.get("yhd-"+id)).thenReturn(new PaymentGateway.Payment(p.id(),"CANCELLED",1000,1000,"KRW","store-test",id.toString(),p.paidAt(),List.of(new PaymentGateway.Cancellation("lost-response","SUCCEEDED",1000))));
         assertThat(refunds.reconcile(admin,r,"lost-response").get("status")).isEqualTo("SUCCEEDED");
         verify(gateway,times(1)).cancel(anyString(),anyInt(),anyInt(),anyString());
     }
@@ -203,7 +203,7 @@ class ServiceIntegrationTest {
         UUID id=create("charm");pay(id);UUID r=(UUID)refunds.request(user,id,"NOT_PROVIDED").get("id");
         accounts.withdraw(user);
         assertThat(db.rows("select * from analysis_result where member_id=?",user)).isEmpty();
-        var p=paid(id);when(gateway.get("yhd-"+id)).thenReturn(new PaymentGateway.Payment(p.id(),"CANCELLED",990,990,"KRW","store-test",id.toString(),p.paidAt(),List.of(new PaymentGateway.Cancellation("after-withdrawal","SUCCEEDED",990))));
+        var p=paid(id);when(gateway.get("yhd-"+id)).thenReturn(new PaymentGateway.Payment(p.id(),"CANCELLED",1000,1000,"KRW","store-test",id.toString(),p.paidAt(),List.of(new PaymentGateway.Cancellation("after-withdrawal","SUCCEEDED",1000))));
         assertThat(refunds.reconcile(admin,r,"after-withdrawal").get("status")).isEqualTo("SUCCEEDED");
         assertThat(db.one("select * from entitlement where order_id=?",id).get("status")).isEqualTo("REVOKED");
     }

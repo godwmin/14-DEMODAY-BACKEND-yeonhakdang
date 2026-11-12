@@ -108,11 +108,18 @@ class PayAppIntegrationTest {
         assertThat(db.rows("select * from entitlement where order_id=?",id)).isEmpty();
     }
     @Test void minimumPhoneAndMerchantMethodAreEnforcedBeforeProviderCall() {
-        assertThatThrownBy(()->orders.prepare(user,create("charm"),"CARD","01012345678")).hasMessage("PAYAPP_MINIMUM_AMOUNT");
+        UUID legacy=create("charm");db.update("update purchase_order set amount=990 where id=?",legacy);
+        assertThatThrownBy(()->orders.prepare(user,legacy,"CARD","01012345678")).hasMessage("PAYAPP_MINIMUM_AMOUNT");
         UUID id=create("benefactor");
         assertThatThrownBy(()->orders.prepare(user,id,"CARD",null)).hasMessage("PAYMENT_PHONE_REQUIRED");
         assertThatThrownBy(()->orders.prepare(user,id,"KAKAO","01012345678")).hasMessage("CHANNEL_NOT_CONFIGURED");
         assertThat(calls.get()).isZero();
+    }
+    @Test void charmUses1000WonForRequestAndFullRefund() {
+        UUID id=create("charm");orders.prepare(user,id,"CARD","01012345678");
+        assertThat(sent.get()).containsEntry("price","1000");
+        var event=notification(id,"4");event.put("price","1000");gateway.receive(event);orders.complete(user,id);
+        assertThat(refunds.request(user,id,"CHANGE_OF_MIND")).containsEntry("amount",1000);
     }
     @Test void verifiedFormCallbackGrantsOnceAndBrowserReturnNeverGrants() throws Exception {
         UUID id=prepare();
