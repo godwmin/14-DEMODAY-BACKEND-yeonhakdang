@@ -60,6 +60,17 @@ class OrderResultIntegrationTest {
         mvc.perform(put("/api/orders/"+order+"/result-snapshot").with(user(member.toString())).with(csrf()).contentType("application/json").content(snapshot().replace("구매당시이름","바뀐이름")))
             .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("CONTENT_IMMUTABLE"));
     }
+    @Test void samePaidReportCannotBeChargedAgainButDifferentInputCan() throws Exception {
+        save();pay();
+        UUID original=order;
+        UUID result=(UUID)db.one("select result_id from purchase_order where id=?",original).get("result_id");
+        order=(UUID)orders.create(member,"duplicate_"+UUID.randomUUID(),new ApiController.OrderInput(result,"package",List.of("연세대학교"),"선배","2026-10-29-draft",true,true)).get("id");
+        save();
+        assertThatThrownBy(()->orders.prepare(member,order,"CARD")).hasMessage("ALREADY_OWNED");
+        order=(UUID)orders.create(member,"different_"+UUID.randomUUID(),new ApiController.OrderInput(result,"package",List.of("연세대학교"),"선배","2026-10-29-draft",true,true)).get("id");
+        mvc.perform(put("/api/orders/"+order+"/result-snapshot").with(user(member.toString())).with(csrf()).contentType("application/json").content(snapshot().replace("구매당시이름","다른이름"))).andExpect(status().isOk());
+        assertThat(orders.prepare(member,order,"CARD")).containsEntry("paymentId","yhd-"+order);
+    }
     @Test void requiresOwnershipPaymentEntitlementAndCsrf() throws Exception {
         save();pay();
         mvc.perform(post(open("compat")).with(csrf())).andExpect(status().isUnauthorized());

@@ -46,7 +46,8 @@ public class OrderService {
         if(gateway instanceof PayAppGateway payapp) {
             tx.executeWithoutResult(s->{db.owned(user,id);accounts.requireConsent(user);
                 if(!sales) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"PAID_CONTENT_NOT_READY");
-                if(db.rows("select order_id from order_result_snapshot where order_id=?",id).isEmpty()) throw ApiException.conflict("SAVED_RESULT_MISSING");});
+                if(db.rows("select order_id from order_result_snapshot where order_id=?",id).isEmpty()) throw ApiException.conflict("SAVED_RESULT_MISSING");
+                rejectDuplicateReport(user,id);});
             return payapp.prepare(user,id,method,phone);
         }
         return tx.execute(s->prepareLegacy(user,id,method));
@@ -55,6 +56,7 @@ public class OrderService {
         var o=db.owned(user,id);accounts.requireConsent(user);
         if(!sales) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"PAID_CONTENT_NOT_READY");
         if(db.rows("select order_id from order_result_snapshot where order_id=?",id).isEmpty()) throw ApiException.conflict("SAVED_RESULT_MISSING");
+        rejectDuplicateReport(user,id);
         if(!Set.of("CREATED","READY","FAILED").contains(o.get("status"))) throw ApiException.conflict("ORDER_NOT_PAYABLE");
         String channel=channels.get(method);
         if(channel==null||channel.isBlank()||store.isBlank()) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"CHANNEL_NOT_CONFIGURED");
@@ -67,6 +69,21 @@ public class OrderService {
         if(!"CARD".equals(method)) sdk.put("easyPay",Map.of("easyPayProvider","KAKAO".equals(method)?"KAKAOPAY":"TOSSPAY"));
         sdk.put("customData",Map.of("orderId",id.toString()));
         sdk.put("redirectUrl",frontend+"/?checkoutOrder="+id);sdk.put("forceRedirect",true);return sdk;
+    }
+    private void rejectDuplicateReport(UUID member,UUID orderId) {
+        var candidate=json.readValue((String)db.one("select snapshot from order_result_snapshot where order_id=?",orderId).get("snapshot"),OrderResultController.Snapshot.class);
+        var order=db.order(orderId);
+        var owned=new HashSet<String>();
+        var previous=db.rows("select e.product_code,s.snapshot from entitlement e join purchase_order o on o.id=e.order_id join order_result_snapshot s on s.order_id=o.id where o.member_id=? and o.id<>? and e.status='ACTIVE' and o.status in ('PAID','PARTIALLY_REFUNDED')",member,orderId);
+        for(var row:previous) {
+            String kind=(String)row.get("product_code");
+            var saved=json.readValue((String)row.get("snapshot"),OrderResultController.Snapshot.class);
+            if(!saved.input().equals(candidate.input())) continue;
+            if("compat".equals(kind)&&!saved.universities().equals(candidate.universities())) continue;
+            if("benefactor".equals(kind)&&!saved.relation().equals(candidate.relation())) continue;
+            owned.add(kind);
+        }
+        if(owned.containsAll(kinds((String)order.get("product_code")))) throw ApiException.conflict("ALREADY_OWNED");
     }
     public Map<String,Object> complete(UUID user,UUID id) {
         tx.executeWithoutResult(s->db.owned(user,id));

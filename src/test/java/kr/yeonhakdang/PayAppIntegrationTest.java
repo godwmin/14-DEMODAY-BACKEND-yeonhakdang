@@ -125,6 +125,21 @@ class PayAppIntegrationTest {
         assertThat(orders.get(user,id)).containsEntry("status","PAID");
         assertThat(db.rows("select * from entitlement where order_id=?",id)).hasSize(1);
     }
+    @Test void freshAuthenticatedSessionRecoversVerifiedApprovalAndRestoresOnlyOwnLibrary() throws Exception {
+        UUID id=prepare();
+        gateway.receive(notification(id,"4")); // Simulate interruption before entitlement provisioning.
+        assertThat(db.rows("select * from entitlement where order_id=?",id)).isEmpty();
+        mvc.perform(get("/api/me/library").with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user(user.toString())))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.accountId").value(user.toString()))
+            .andExpect(jsonPath("$.items[0].order_id").value(id.toString()))
+            .andExpect(jsonPath("$.items[0].status").value("ACTIVE"))
+            .andExpect(jsonPath("$.orders[0].status").value("PAID"));
+        mvc.perform(get("/api/me/library").with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user(admin.toString())))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items").isEmpty()).andExpect(jsonPath("$.orders").isEmpty());
+        mvc.perform(get("/api/me/library")).andExpect(status().isUnauthorized());
+        assertThat(calls.get()).isEqualTo(1); // Recovery uses signed, stored facts, not a new charge.
+        assertThat(db.rows("select * from entitlement where order_id=?",id)).hasSize(1);
+    }
     @Test void forgedOrStaleFeedbackNeverGrants() {
         UUID id=prepare();
         for(String field:List.of("userid","linkkey","linkval","hash","var2","price","mul_no","responsedate")) {
