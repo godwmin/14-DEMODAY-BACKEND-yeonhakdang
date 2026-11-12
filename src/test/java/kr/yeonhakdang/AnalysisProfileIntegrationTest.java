@@ -40,6 +40,19 @@ class AnalysisProfileIntegrationTest {
         mvc.perform(get("/api/me/analysis-profile").with(user(other.toString())))
             .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(0)).andExpect(jsonPath("$.profile").isEmpty());
     }
+    @Test void editedProfileIsCommittedToDatabaseAndReadByANewSession() throws Exception {
+        save();
+        String updated=payload(member,1).replace("연학","수정한이름").replace("2005.03.15","2006.07.21").replace("\"gender\":0","\"gender\":1");
+        mvc.perform(put("/api/me/analysis-profile").with(user(member.toString())).with(csrf()).contentType("application/json").content(updated))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(2));
+        assertThat(db.one("select profile from account_analysis_profile where member_id=?",member).get("profile").toString()).contains("수정한이름","2006.07.21");
+        mvc.perform(get("/api/me/analysis-profile").session(new org.springframework.mock.web.MockHttpSession()).with(user(member.toString())))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(2))
+            .andExpect(jsonPath("$.profile.name").value("수정한이름"))
+            .andExpect(jsonPath("$.profile.birth").value("2006.07.21"))
+            .andExpect(jsonPath("$.profile.gender").value(1))
+            .andExpect(jsonPath("$.profile.friends[0].name").value("친구"));
+    }
     @Test void staleWindowsAndChangedAccountsCannotOverwrite() throws Exception {
         save();
         mvc.perform(put("/api/me/analysis-profile").with(user(member.toString())).with(csrf()).contentType("application/json").content(payload(member,0)))
