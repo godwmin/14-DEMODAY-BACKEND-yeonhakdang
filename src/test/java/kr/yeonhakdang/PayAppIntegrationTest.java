@@ -127,7 +127,8 @@ class PayAppIntegrationTest {
             .andExpect(status().isSeeOther()).andExpect(header().string("Location","http://localhost:3000/?checkoutOrder="+id));
         assertThat(db.rows("select * from entitlement where order_id=?",id)).isEmpty();
         String body=form(notification(id,"4"));
-        for(int i=0;i<2;i++) mvc.perform(post("/api/webhooks/payapp").contentType("application/x-www-form-urlencoded").content(body))
+        for(int i=0;i<2;i++) mvc.perform(post("/api/webhooks/payapp").contentType("application/x-www-form-urlencoded").content(body)
+            .with(request->{request.removeAllParameters();return request;}))
             .andExpect(status().isOk()).andExpect(content().string("SUCCESS"));
         assertThat(orders.get(user,id)).containsEntry("status","PAID");
         assertThat(db.rows("select * from entitlement where order_id=?",id)).hasSize(1);
