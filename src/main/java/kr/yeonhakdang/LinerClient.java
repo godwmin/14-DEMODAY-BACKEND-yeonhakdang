@@ -10,7 +10,6 @@ import java.util.*;
 
 @Component
 public class LinerClient {
-    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(LinerClient.class);
     static final class Failure extends RuntimeException {
         final String code;final int httpStatus;final String providerCode,providerReason;
         Failure(String code,int httpStatus,String providerCode) {this(code,httpStatus,providerCode,"");}
@@ -64,20 +63,9 @@ public class LinerClient {
             문단은 3개, 각 문단 80~350자, 전체 900자 이내로 쓰고 마크다운·HTML은 쓰지 마세요.
             """;
         var body=Map.of("model",model,"stream",false,"max_completion_tokens",1800,"reasoning_effort","none",
-            "response_format",Map.of("type","json_object"),"messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",json.writeValueAsString(input))));
+            "response_format",Map.of("type","json_object"),"messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content","다음은 이미 계산한 사주와 학과 추천 결과입니다. 이 데이터를 설명하고 요청한 JSON 형식으로 해설을 반환해 주세요.\n분석 데이터:\n"+json.writeValueAsString(input))));
         long deadline=System.nanoTime()+Duration.ofSeconds(20).toNanos();
         HttpResponse<String> response=send(body,deadline);
-        if(response.statusCode()==400) {
-            Failure error=rejected(400,response.body());
-            if(Set.of("invalid_request","unsupported_parameter","unknown_parameter").contains(error.providerCode)) {
-                // Retry a rejected request once using the core Chat Completions contract.
-                // Never retry auth, credits, rate limits, content refusals, or ambiguous timeouts.
-                log.info("Retrying Liner with core parameters providerCode={} providerReason={}",error.providerCode,error.providerReason);
-                var compatible=new LinkedHashMap<String,Object>(body);
-                compatible.remove("reasoning_effort");compatible.remove("max_completion_tokens");
-                response=send(compatible,deadline);
-            }
-        }
         if(response.statusCode()!=200) throw rejected(response.statusCode(),response.body());
         if(response.body().length()>65536) throw failure("AI_INVALID_RESPONSE");
         tools.jackson.databind.JsonNode choice;

@@ -23,18 +23,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test") @AutoConfigureMockMvc
 class SajuExplanationIntegrationTest {
     @Autowired AccountService accounts;@Autowired MockMvc mvc;@Autowired Store db;@Autowired LinerClient liner;@Autowired tools.jackson.databind.ObjectMapper json;
-    HttpServer server;AtomicInteger calls;AtomicReference<String> prompt,authorization;String response;int status,delay;boolean rejectOptional;
+    HttpServer server;AtomicInteger calls;AtomicReference<String> prompt,authorization;String response;int status,delay;boolean rejectBareJson;
     @BeforeEach void setup() throws Exception {
         db.update("delete from ai_explanation");db.update("delete from ai_generation_quota");db.update("update ai_generation_budget set budget_day='',used=0 where id=1");
-        calls=new AtomicInteger();prompt=new AtomicReference<>();authorization=new AtomicReference<>();status=200;delay=0;rejectOptional=false;
+        calls=new AtomicInteger();prompt=new AtomicReference<>();authorization=new AtomicReference<>();status=200;delay=0;rejectBareJson=false;
         String paragraphs=json.writeValueAsString(Map.of("paragraphs",List.of("목의 기운을 중심으로 관심과 생각을 차근차근 펼쳐보는 성향으로 해석할 수 있어요.","추천 학과는 확정된 적성이나 합격 가능성이 아니라 관심 분야를 탐색할 출발점으로 살펴보세요.","작은 프로젝트를 해보며 흥미를 확인해 보세요. 사주 해석은 진로 탐색을 위한 참고 자료예요.")));
         response=json.writeValueAsString(Map.of("choices",List.of(Map.of("finish_reason","stop","message",Map.of("content",paragraphs)))));
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/",exchange->{
             calls.incrementAndGet();prompt.set(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             try {Thread.sleep(delay);} catch(InterruptedException e) {Thread.currentThread().interrupt();}
-            boolean rejected=rejectOptional&&prompt.get().contains("reasoning_effort");
-            String payload=rejected?"{\"error\":{\"code\":\"invalid_request\",\"message\":\"Optional parameters are not accepted\"}}":response;
+            String userContent=json.readTree(prompt.get()).path("messages").path(1).path("content").asText();
+            boolean rejected=rejectBareJson&&userContent.stripLeading().startsWith("{");
+            String payload=rejected?"{\"error\":{\"code\":\"invalid_request\",\"message\":\"The request was rejected as invalid. Check the request and try again.\"}}":response;
             byte[] bytes=payload.getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(rejected?400:status,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
         });server.start();liner.endpoint(URI.create("http://127.0.0.1:"+server.getAddress().getPort()));
     }
@@ -78,24 +79,19 @@ class SajuExplanationIntegrationTest {
         response=json.writeValueAsString(Map.of("choices",List.of(Map.of("finish_reason","stop","message",Map.of("content","```json\n"+text+"\n```")))));
         send(input("fenced"),true,new MockHttpSession()).andExpect(jsonPath("$.status").value("READY"));
     }
-    @Test void rejectedOptionalParametersRetryOnceWithTheCoreJsonContract() throws Exception {
-        rejectOptional=true;
-        send(input("compat"),true,new MockHttpSession()).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY"));
-        assertThat(calls.get()).isEqualTo(2);
-        var last=json.readTree(prompt.get());
-        assertThat(last.has("reasoning_effort")).isFalse();assertThat(last.has("max_completion_tokens")).isFalse();
-        assertThat(last.path("response_format").path("type").asText()).isEqualTo("json_object");
-        assertThat(prompt.get()).contains("컴퓨터공학과","liner-gpt-router");
-    }
-    @Test void genericRejectionRetriesOnlyOnceAndKeepsItsSafeReason() throws Exception {
-        status=400;response="{\"error\":{\"code\":\"invalid_request\",\"message\":\"Request validation failed\"}}";
-        send(input("rejected"),true,new MockHttpSession()).andExpect(jsonPath("$.failureCode").value("AI_REQUEST_REJECTED"));
-        assertThat(calls.get()).isEqualTo(2);
-    }
     @Test void diagnosticReasonRedactsSecretsQuotedValuesAndControlCharacters() {
         String reason=liner.safeReason("Bad request: fixture-key 'private input' \"another secret\" `private`\n"+"a".repeat(60));
         assertThat(reason).contains("Bad request:").doesNotContain("fixture-key","private input","another secret","private`","\n","a".repeat(60));
         assertThat(reason.length()).isLessThanOrEqualTo(240);
+    }
+    @Test void derivedJsonIsIntroducedAsAnExplanationRequestInsteadOfABareUserMessage() throws Exception {
+        // Live Liner rejected a bare JSON user message with 400 invalid_request.
+        // The same values with an explicit explanation request were accepted.
+        rejectBareJson=true;
+        send(input("json-user-message"),true,new MockHttpSession()).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY"));
+        assertThat(calls.get()).isEqualTo(1);
+        String content=json.readTree(prompt.get()).path("messages").path(1).path("content").asText();
+        assertThat(content).doesNotStartWith("{").contains("분석 데이터:","컴퓨터공학과");
     }
     @Test void csrfAndInputValidationRunBeforeAnyModelCall() throws Exception {
         mvc.perform(post("/api/ai/saju-explanation").contentType("application/json").content(input("test"))).andExpect(status().isForbidden());
