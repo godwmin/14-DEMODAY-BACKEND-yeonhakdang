@@ -58,6 +58,24 @@ class SajuExplanationIntegrationTest {
         assertThat(calls.get()).isEqualTo(1);
         status=401;send(input("bad-key"),true,new MockHttpSession()).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UNAVAILABLE"));
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"401,AI_AUTH_FAILED","402,AI_CREDITS_REQUIRED","403,AI_ACCESS_DENIED","400,AI_REQUEST_REJECTED","429,AI_PROVIDER_RATE_LIMITED","503,AI_PROVIDER_UNAVAILABLE"})
+    void providerFailuresHaveSafeActionableCodes(int httpStatus,String code) throws Exception {
+        status=httpStatus;response="{\"error\":{\"code\":\"fixture_code\",\"message\":\"secret-value-never-expose\"}}";
+        String body=send(input("failure"+httpStatus),true,new MockHttpSession()).andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("UNAVAILABLE")).andExpect(jsonPath("$.failureCode").value(code))
+            .andReturn().getResponse().getContentAsString();
+        assertThat(body).doesNotContain("secret-value-never-expose","fixture-key");
+        send(input("failure"+httpStatus),false,new MockHttpSession()).andExpect(jsonPath("$.failureCode").value(code));
+        assertThat(db.one("select failure_code from ai_explanation").get("failure_code")).isEqualTo(code);
+        assertThat(calls.get()).isEqualTo(1);
+    }
+    @Test void acceptsJsonFencesButStillValidatesParagraphs() throws Exception {
+        var root=json.readTree(response);
+        String text=root.path("choices").path(0).path("message").path("content").asText();
+        response=json.writeValueAsString(Map.of("choices",List.of(Map.of("finish_reason","stop","message",Map.of("content","```json\n"+text+"\n```")))));
+        send(input("fenced"),true,new MockHttpSession()).andExpect(jsonPath("$.status").value("READY"));
+    }
     @Test void csrfAndInputValidationRunBeforeAnyModelCall() throws Exception {
         mvc.perform(post("/api/ai/saju-explanation").contentType("application/json").content(input("test"))).andExpect(status().isForbidden());
         send(input("test").replace("\"wood\":4","\"wood\":3"),true,new MockHttpSession()).andExpect(status().isBadRequest());

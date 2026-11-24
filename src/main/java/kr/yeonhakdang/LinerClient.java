@@ -10,6 +10,27 @@ import java.util.*;
 
 @Component
 public class LinerClient {
+    static final class Failure extends RuntimeException {
+        final String code;final int httpStatus;final String providerCode;
+        Failure(String code,int httpStatus,String providerCode) {super(code);this.code=code;this.httpStatus=httpStatus;this.providerCode=providerCode;}
+    }
+    private Failure failure(String code) {return new Failure(code,0,"");}
+    private Failure rejected(int status,String body) {
+        String providerCode="";
+        try {
+            String raw=json.readTree(body).path("error").path("code").asText();
+            if(raw.matches("[A-Za-z0-9_.-]{1,80}")) providerCode=raw;
+        } catch(Exception ignored) {}
+        String code=switch(status) {
+            case 401 -> "AI_AUTH_FAILED";
+            case 402 -> "AI_CREDITS_REQUIRED";
+            case 403 -> "AI_ACCESS_DENIED";
+            case 400,404,422 -> "AI_REQUEST_REJECTED";
+            case 429 -> "AI_PROVIDER_RATE_LIMITED";
+            default -> "AI_PROVIDER_UNAVAILABLE";
+        };
+        return new Failure(code,status,providerCode);
+    }
     private final String key,model;
     private final ObjectMapper json;
     private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
@@ -36,22 +57,34 @@ public class LinerClient {
         var request=HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(20))
             .header("Authorization","Bearer "+key).header("Content-Type","application/json")
             .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
-        var response=http.send(request,HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
-        if(response.statusCode()!=200||response.body().length()>65536) throw new IllegalStateException("AI_PROVIDER_UNAVAILABLE");
-        var choice=json.readTree(response.body()).path("choices").path(0);
-        if(!"stop".equals(choice.path("finish_reason").asText())) throw new IllegalStateException("AI_INCOMPLETE_RESPONSE");
-        var parsed=json.readTree(choice.path("message").path("content").asText());
+        HttpResponse<String> response;
+        try {response=http.send(request,HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));}
+        catch(java.net.http.HttpTimeoutException e) {throw failure("AI_TIMEOUT");}
+        catch(java.io.IOException e) {throw failure("AI_CONNECTION_FAILED");}
+        if(response.statusCode()!=200) throw rejected(response.statusCode(),response.body());
+        if(response.body().length()>65536) throw failure("AI_INVALID_RESPONSE");
+        tools.jackson.databind.JsonNode choice;
+        try {choice=json.readTree(response.body()).path("choices").path(0);}
+        catch(Exception e) {throw failure("AI_INVALID_RESPONSE");}
+        if(!"stop".equals(choice.path("finish_reason").asText())) throw failure("AI_INCOMPLETE_RESPONSE");
+        String content=choice.path("message").path("content").asText().trim();
+        // Some providers wrap an otherwise valid JSON response in a Markdown fence.
+        if(content.startsWith("```json")&&content.endsWith("```")) content=content.substring(7,content.length()-3).trim();
+        else if(content.startsWith("```")&&content.endsWith("```")) content=content.substring(3,content.length()-3).trim();
+        tools.jackson.databind.JsonNode parsed;
+        try {parsed=json.readTree(content);}
+        catch(Exception e) {throw failure("AI_INVALID_RESPONSE");}
         var paragraphs=parsed.path("paragraphs");
-        if(!paragraphs.isArray()||paragraphs.size()!=3) throw new IllegalStateException("AI_INVALID_RESPONSE");
+        if(!paragraphs.isArray()||paragraphs.size()!=3) throw failure("AI_INVALID_RESPONSE");
         var result=new ArrayList<String>();
         int length=0;
         for(var paragraph:paragraphs) {
-            if(!paragraph.isString()) throw new IllegalStateException("AI_INVALID_RESPONSE");
+            if(!paragraph.isString()) throw failure("AI_INVALID_RESPONSE");
             String value=paragraph.asText().trim();length+=value.length();
-            if(value.length()<20||value.length()>600) throw new IllegalStateException("AI_INVALID_RESPONSE");
+            if(value.length()<20||value.length()>600) throw failure("AI_INVALID_RESPONSE");
             result.add(value);
         }
-        if(length>1500) throw new IllegalStateException("AI_INVALID_RESPONSE");
+        if(length>1500) throw failure("AI_INVALID_RESPONSE");
         return List.copyOf(result);
     }
 }

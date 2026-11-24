@@ -22,7 +22,10 @@ public class SajuExplanationController {
         @NotNull @Pattern(regexp="[갑을병정무기경신임계]") String dayMaster,
         @NotNull @Size(min=5,max=5) Map<String,@NotNull @Min(0) @Max(8) Integer> counts,
         @NotNull @Size(min=3,max=3) List<@NotNull @Valid Major> top) {}
-    public record Explanation(String status,List<String> paragraphs) {}
+    public record Explanation(String status,List<String> paragraphs,String failureCode) {
+        public Explanation(String status,List<String> paragraphs) {this(status,paragraphs,null);}
+    }
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(SajuExplanationController.class);
     private final Store db;private final AccountService accounts;private final LinerClient liner;
     private final ObjectMapper json;private final Clock clock;private final TransactionTemplate tx;private final int dailyLimit;
     public SajuExplanationController(Store db,AccountService accounts,LinerClient liner,ObjectMapper json,Clock clock,PlatformTransactionManager tm,@Value("${LINER_DAILY_LIMIT:200}") int dailyLimit) {
@@ -51,7 +54,7 @@ public class SajuExplanationController {
                 if("READY".equals(row.get("state"))) return new Explanation("READY",Arrays.asList(json.readValue((String)row.get("paragraphs"),String[].class)));
                 var age=Duration.between(Store.instant(row.get("updated_at")),now).getSeconds();
                 if("PENDING".equals(row.get("state"))&&age<45) return status("PENDING");
-                if("FAILED".equals(row.get("state"))&&age<120) return status("UNAVAILABLE");
+                if("FAILED".equals(row.get("state"))&&age<120) return new Explanation("UNAVAILABLE",List.of(),(String)row.get("failure_code"));
             }
             if(!liner.configured()) return status("DISABLED");
             if(!generate) return status("NOT_GENERATED");
@@ -66,18 +69,23 @@ public class SajuExplanationController {
             else db.update("update ai_generation_quota set bucket=?,used=? where owner_hash=?",bucket,hourly+1,ownerHash);
             db.update("delete from ai_generation_quota where bucket<?",now.minus(Duration.ofDays(1)).toString().substring(0,13));
             if(cached.isEmpty()) db.update("insert into ai_explanation(cache_key,state,updated_at) values(?,'PENDING',?)",key,now);
-            else db.update("update ai_explanation set state='PENDING',updated_at=? where cache_key=?",now,key);
+            else db.update("update ai_explanation set state='PENDING',failure_code=null,updated_at=? where cache_key=?",now,key);
             return status("GENERATE");
         });
         if(!"GENERATE".equals(reservation.status())) return reservation;
         try {
             var paragraphs=liner.explain(canonical);
-            tx.executeWithoutResult(s->db.update("update ai_explanation set state='READY',paragraphs=?,updated_at=? where cache_key=?",json.writeValueAsString(paragraphs),clock.instant(),key));
+            tx.executeWithoutResult(s->db.update("update ai_explanation set state='READY',failure_code=null,paragraphs=?,updated_at=? where cache_key=?",json.writeValueAsString(paragraphs),clock.instant(),key));
             return new Explanation("READY",paragraphs);
         } catch(Exception e) {
             if(e instanceof InterruptedException) Thread.currentThread().interrupt();
-            tx.executeWithoutResult(s->db.update("update ai_explanation set state='FAILED',updated_at=? where cache_key=?",clock.instant(),key));
-            return status("UNAVAILABLE");
+            String failureCode=e instanceof LinerClient.Failure f?f.code:"AI_INTERNAL_ERROR";
+            int httpStatus=e instanceof LinerClient.Failure f?f.httpStatus:0;
+            String providerCode=e instanceof LinerClient.Failure f?f.providerCode:"";
+            // Fixed codes only: do not print the response body, prompt, key or exception message.
+            log.warn("Liner explanation unavailable failureCode={} httpStatus={} providerCode={}",failureCode,httpStatus,providerCode);
+            tx.executeWithoutResult(s->db.update("update ai_explanation set state='FAILED',failure_code=?,updated_at=? where cache_key=?",failureCode,clock.instant(),key));
+            return new Explanation("UNAVAILABLE",List.of(),failureCode);
         }
     }
 }

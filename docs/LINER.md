@@ -29,3 +29,17 @@
 
 Liner 공식 계약: https://liner.com/developers/docs/liner-model-api-chat-completions
 호출: `POST https://platform.liner.com/api/v1/chat/completions`, `Authorization: Bearer ...`, 비스트리밍 JSON 응답. 테스트는 로컬 HTTP 모의 서버를 사용한다. 실제 키·크레딧이 없는 상태에서는 운영 Liner 호출과 생성 문구의 품질은 확인할 수 없다.
+
+## 운영 오류 확인
+
+`UNAVAILABLE` 응답의 `failureCode`와 Olim 로그의 `Liner explanation unavailable` 행을 확인한다. 같은 실패 결과의 조회에도 고정된 오류 코드를 반환한다. API 키, 요청 프롬프트, 원문 응답은 로그에 남기지 않는다.
+
+- `AI_AUTH_FAILED`: Liner가 HTTP 401 반환. API 키가 맞는지와 재배포 여부 확인.
+- `AI_CREDITS_REQUIRED`: HTTP 402. Liner API 잔액·결제 상태 확인.
+- `AI_ACCESS_DENIED`: HTTP 403. 해당 키·계정의 API 접근 권한 확인.
+- `AI_REQUEST_REJECTED`: HTTP 400/404/422. 모델 및 요청 파라미터 확인. 로그의 `providerCode`는 제공자의 오류 코드이며 메시지 원문은 기록하지 않는다.
+- `AI_PROVIDER_RATE_LIMITED`: HTTP 429. 제공자 측 요청 제한.
+- `AI_TIMEOUT` / `AI_CONNECTION_FAILED`: 타임아웃 또는 서버 네트워크 연결 실패.
+- `AI_INVALID_RESPONSE` / `AI_INCOMPLETE_RESPONSE`: JSON·문단 검증 실패 또는 응답 미완료.
+
+프론트의 작은 안내에는 제공자나 서버 저장 방식 대신 사용자에게 필요한 설명만 표시한다. 실제 원인 수정 여부는 운영 API에서 `READY`와 해설 문단 3개가 반환되는지 확인해야 한다.
