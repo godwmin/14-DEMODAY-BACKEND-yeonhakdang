@@ -82,8 +82,9 @@ public class SajuExplanationController {
             String failureCode=e instanceof LinerClient.Failure f?f.code:"AI_INTERNAL_ERROR";
             int httpStatus=e instanceof LinerClient.Failure f?f.httpStatus:0;
             String providerCode=e instanceof LinerClient.Failure f?f.providerCode:"";
-            // Fixed codes only: do not print the response body, prompt, key or exception message.
-            log.warn("Liner explanation unavailable failureCode={} httpStatus={} providerCode={}",failureCode,httpStatus,providerCode);
+            String providerReason=e instanceof LinerClient.Failure f?f.providerReason:"";
+            // Never log raw bodies, prompts or exception messages; reason is short, redacted ASCII.
+            log.warn("Liner explanation unavailable failureCode={} httpStatus={} providerCode={} providerReason={}",failureCode,httpStatus,providerCode,providerReason);
             tx.executeWithoutResult(s->db.update("update ai_explanation set state='FAILED',failure_code=?,updated_at=? where cache_key=?",failureCode,clock.instant(),key));
             return new Explanation("UNAVAILABLE",List.of(),failureCode);
         }

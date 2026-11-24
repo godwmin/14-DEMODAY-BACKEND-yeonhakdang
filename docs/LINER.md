@@ -43,3 +43,5 @@ Liner 공식 계약: https://liner.com/developers/docs/liner-model-api-chat-comp
 - `AI_INVALID_RESPONSE` / `AI_INCOMPLETE_RESPONSE`: JSON·문단 검증 실패 또는 응답 미완료.
 
 프론트의 작은 안내에는 제공자나 서버 저장 방식 대신 사용자에게 필요한 설명만 표시한다. 실제 원인 수정 여부는 운영 API에서 `READY`와 해설 문단 3개가 반환되는지 확인해야 한다.
+
+400 중 `invalid_request`, `unsupported_parameter`, `unknown_parameter`에는 `reasoning_effort`와 `max_completion_tokens`를 제외한 핵심 JSON 요청으로 1회만 재시도한다. 두 시도에 같은 20초 제한을 공유한다. 인증·잔액·요청 제한·콘텐츠 정책 오류·네트워크 타임아웃은 자동 재시도하지 않는다. `providerReason`은 실제 키, 따옴표 안의 값, 긴 토큰과 비ASCII 문자를 가린 최대 240자의 진단 설명으로, 운영 로그에만 표시한다. 원문 응답을 프론트에 전달하지 않는다.

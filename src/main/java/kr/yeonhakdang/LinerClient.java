@@ -10,16 +10,27 @@ import java.util.*;
 
 @Component
 public class LinerClient {
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(LinerClient.class);
     static final class Failure extends RuntimeException {
-        final String code;final int httpStatus;final String providerCode;
-        Failure(String code,int httpStatus,String providerCode) {super(code);this.code=code;this.httpStatus=httpStatus;this.providerCode=providerCode;}
+        final String code;final int httpStatus;final String providerCode,providerReason;
+        Failure(String code,int httpStatus,String providerCode) {this(code,httpStatus,providerCode,"");}
+        Failure(String code,int httpStatus,String providerCode,String providerReason) {super(code);this.code=code;this.httpStatus=httpStatus;this.providerCode=providerCode;this.providerReason=providerReason;}
+    }
+    String safeReason(String raw) {
+        String value=key.isBlank()?raw:raw.replace(key,"[redacted]");
+        value=value.replace('\r',' ').replace('\n',' ').replace('\t',' ');
+        value=value.replaceAll("['\"`][^'\"`]*['\"`]","[redacted]");
+        value=value.replaceAll("[A-Za-z0-9_+/=-]{24,}","[redacted]");
+        value=value.replaceAll("[^ -~]"," ");
+        return value.substring(0,Math.min(value.length(),240));
     }
     private Failure failure(String code) {return new Failure(code,0,"");}
     private Failure rejected(int status,String body) {
-        String providerCode="";
+        String providerCode="",providerReason="";
         try {
             String raw=json.readTree(body).path("error").path("code").asText();
             if(raw.matches("[A-Za-z0-9_.-]{1,80}")) providerCode=raw;
+            providerReason=safeReason(json.readTree(body).path("error").path("message").asText());
         } catch(Exception ignored) {}
         String code=switch(status) {
             case 401 -> "AI_AUTH_FAILED";
@@ -29,14 +40,14 @@ public class LinerClient {
             case 429 -> "AI_PROVIDER_RATE_LIMITED";
             default -> "AI_PROVIDER_UNAVAILABLE";
         };
-        return new Failure(code,status,providerCode);
+        return new Failure(code,status,providerCode,providerReason);
     }
     private final String key,model;
     private final ObjectMapper json;
     private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private URI endpoint=URI.create("https://platform.liner.com/api/v1/chat/completions");
     public LinerClient(ObjectMapper json,@Value("${LINER_API_KEY:}") String key,@Value("${LINER_MODEL:liner-gpt-router}") String model) {
-        this.json=json;this.key=key.trim();this.model=model;
+        this.json=json;this.key=key.trim();this.model=model.isBlank()?"liner-gpt-router":model.trim();
     }
     boolean configured() {return !key.isBlank();}
     String model() {return model;}
@@ -54,13 +65,19 @@ public class LinerClient {
             """;
         var body=Map.of("model",model,"stream",false,"max_completion_tokens",1800,"reasoning_effort","none",
             "response_format",Map.of("type","json_object"),"messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",json.writeValueAsString(input))));
-        var request=HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(20))
-            .header("Authorization","Bearer "+key).header("Content-Type","application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
-        HttpResponse<String> response;
-        try {response=http.send(request,HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));}
-        catch(java.net.http.HttpTimeoutException e) {throw failure("AI_TIMEOUT");}
-        catch(java.io.IOException e) {throw failure("AI_CONNECTION_FAILED");}
+        long deadline=System.nanoTime()+Duration.ofSeconds(20).toNanos();
+        HttpResponse<String> response=send(body,deadline);
+        if(response.statusCode()==400) {
+            Failure error=rejected(400,response.body());
+            if(Set.of("invalid_request","unsupported_parameter","unknown_parameter").contains(error.providerCode)) {
+                // Retry a rejected request once using the core Chat Completions contract.
+                // Never retry auth, credits, rate limits, content refusals, or ambiguous timeouts.
+                log.info("Retrying Liner with core parameters providerCode={} providerReason={}",error.providerCode,error.providerReason);
+                var compatible=new LinkedHashMap<String,Object>(body);
+                compatible.remove("reasoning_effort");compatible.remove("max_completion_tokens");
+                response=send(compatible,deadline);
+            }
+        }
         if(response.statusCode()!=200) throw rejected(response.statusCode(),response.body());
         if(response.body().length()>65536) throw failure("AI_INVALID_RESPONSE");
         tools.jackson.databind.JsonNode choice;
@@ -87,4 +104,15 @@ public class LinerClient {
         if(length>1500) throw failure("AI_INVALID_RESPONSE");
         return List.copyOf(result);
     }
+    private HttpResponse<String> send(Map<String,?> body,long deadline) throws Exception {
+        long remaining=deadline-System.nanoTime();
+        if(remaining<=0) throw failure("AI_TIMEOUT");
+        var request=HttpRequest.newBuilder(endpoint).timeout(Duration.ofNanos(remaining))
+            .header("Authorization","Bearer "+key).header("Content-Type","application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
+        try {return http.send(request,HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));}
+        catch(java.net.http.HttpTimeoutException e) {throw failure("AI_TIMEOUT");}
+        catch(java.io.IOException e) {throw failure("AI_CONNECTION_FAILED");}
+    }
+
 }
